@@ -1,8 +1,11 @@
-﻿using System.Collections;
+﻿using System;
+using System.CodeDom;
+using System.Collections;
 using System.Linq;
 using System.Reflection;
-using HutongGames.PlayMaker;
+using HutongGames.PlayMaker.Actions;
 using JetBrains.Annotations;
+using ModCommon;
 using Modding;
 using UnityEngine;
 using static BossSequenceController;
@@ -13,7 +16,9 @@ namespace Bindings
     public class Bindings : Mod
     {
         private static readonly FieldInfo DATA_FI = typeof(BossSequenceController).GetField("currentData", FLAGS);
-        private static readonly FieldInfo SEQUENCE_FI = typeof(BossSequenceController).GetField("currentSequence", FLAGS);
+
+        private static readonly FieldInfo SEQUENCE_FI =
+            typeof(BossSequenceController).GetField("currentSequence", FLAGS);
 
         private const ChallengeBindings BINDINGS = (ChallengeBindings) 15;
         private const BindingFlags FLAGS = BindingFlags.NonPublic | BindingFlags.Static;
@@ -26,8 +31,16 @@ namespace Bindings
                 GameManager.instance.StartCoroutine(SetBindings());
             };
 
+            ModHooks.Instance.SoulGainHook += OnSoulGain;
+
             On.GetNailDamage.OnEnter += NailBinding;
             On.HeroController.MaxHealth += MaxHealth;
+        }
+
+        private int OnSoulGain(int num)
+        {
+            Log(PlayerData.instance.MPCharge + "?: " + num);
+            return PlayerData.instance.MPCharge + num > 33 ? 0 : num;
         }
 
         private static void MaxHealth(On.HeroController.orig_MaxHealth orig, HeroController self)
@@ -45,15 +58,17 @@ namespace Bindings
             {
                 self.storeValue.Value = 13;
             }
-            
+
             self.Finish();
         }
 
         private IEnumerator SetBindings()
         {
-            yield return null;
-            yield return null;
-            
+            if (HeroController.instance == null || GameManager.instance == null)
+            {
+                yield break;
+            }
+
             if (DATA_FI == null || SEQUENCE_FI == null)
             {
                 Log("wtf");
@@ -67,22 +82,27 @@ namespace Bindings
                 {
                     bindings = BINDINGS
                 });
-            } 
+            }
             else if (string.IsNullOrEmpty(data.bossSequenceName))
             {
                 data.bindings = BINDINGS;
             }
 
             BossSequence seq = (BossSequence) SEQUENCE_FI.GetValue(null);
-            
+
             if (seq == null)
             {
-                BossSequence bs = ScriptableObject.CreateInstance<BossSequence>();
-                bs.maxHealth = 4;
-                bs.nailDamage = 13;
-                bs.lowerNailDamagePercentage = 1f;
-                
-                SEQUENCE_FI.SetValue(null, bs);
+                yield return new WaitForSeconds(.1f);
+                seq = (BossSequence) SEQUENCE_FI.GetValue(null);
+                if (seq == null)
+                {
+                    BossSequence bs = ScriptableObject.CreateInstance<BossSequence>();
+                    bs.maxHealth = 4;
+                    bs.nailDamage = 13;
+                    bs.lowerNailDamagePercentage = 1f;
+
+                    SEQUENCE_FI.SetValue(null, bs);
+                }
             }
 
             if (seq != null && seq.Count == 1)
@@ -90,34 +110,48 @@ namespace Bindings
                 seq.maxHealth = 4;
                 seq.nailDamage = 13;
             }
-            
-            ApplyBindings();
-            
-            if (data == null)
+
+            EventRegister.SendEvent("SHOW BOUND NAIL");
+            GameManager.instance.playerData.equippedCharms.Clear();
+            GameManager.instance.playerData.overcharmed = false;
+            for (int i = 0; i < 50; i++)
             {
-                DATA_FI.SetValue(null, null);
+                PlayerData.instance.SetBoolInternal("equippedCharm_" + i, false);
             }
+
+            PlayerData.instance.equippedCharms.Clear();
+            EventRegister.SendEvent("SHOW BOUND CHARMS");
+            HeroController.instance.CharmUpdate();
+            PlayMakerFSM.BroadcastEvent("CHARM EQUIP CHECK");
+            EventRegister.SendEvent("UPDATE BLUE HEALTH");
+            PlayMakerFSM.BroadcastEvent("HUD IN");
+            EventRegister.SendEvent("BIND VESSEL ORB");
+
+            while (GameManager.instance == null ||
+                   GameManager.instance.soulOrb_fsm == null ||
+                   GameManager.instance.soulVessel_fsm == null ||
+                   GameCameras.instance.soulOrbFSM == null ||
+                   GameCameras.instance.soulVesselFSM == null ||
+                   GameObject.Find("Health 11") == null)
+            {
+                yield return null;
+            }
+
+            yield return new WaitForSeconds(.2f);
+
+            PlayerData.instance.ClearMP();
+            GameManager.instance.soulOrb_fsm.SendEvent("MP LOSE");
+            GameManager.instance.soulVessel_fsm.SendEvent("MP RESERVE DOWN");
+            PlayMakerFSM.BroadcastEvent("CHARM INDICATOR CHECK");
+
+            yield return new WaitForSeconds(2f);
 
             if (seq == null)
             {
                 SEQUENCE_FI.SetValue(null, null);
             }
 
-            for (int i = 5; i <= 11; i++)
-            {
-                GameObject go = GameObject.Find("Health " + i);
-                
-                if (go == null) continue;
-
-                PlayMakerFSM fsm = go.LocateMyFSM("health_display");
-                
-                foreach (FsmStateAction action in fsm.FsmStates.Single(x => x.Name == "Bound").Actions)
-                {
-                    action.OnEnter();
-                    action.Reset();
-                }
-            }
-            
+            Log("fin");
         }
     }
 }
