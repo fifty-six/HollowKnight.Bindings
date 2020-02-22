@@ -1,157 +1,124 @@
-﻿using System;
-using System.CodeDom;
-using System.Collections;
-using System.Linq;
+﻿using System.Collections;
+using System.Collections.Generic;
 using System.Reflection;
-using HutongGames.PlayMaker.Actions;
 using JetBrains.Annotations;
-using ModCommon;
 using Modding;
+using MonoMod.RuntimeDetour;
 using UnityEngine;
-using static BossSequenceController;
 
 namespace Bindings
 {
     [UsedImplicitly]
-    public class Bindings : Mod
+    public class Bindings : Mod, ITogglableMod
     {
-        private static readonly FieldInfo DATA_FI = typeof(BossSequenceController).GetField("currentData", FLAGS);
+        [UsedImplicitly]
+        public static bool True() => true;
 
-        private static readonly FieldInfo SEQUENCE_FI =
-            typeof(BossSequenceController).GetField("currentSequence", FLAGS);
+        [UsedImplicitly]
+        public static int BoundNailDamage()
+        {
+            int @base = PlayerData.instance.nailDamage;
 
-        private const ChallengeBindings BINDINGS = (ChallengeBindings) 15;
-        private const BindingFlags FLAGS = BindingFlags.NonPublic | BindingFlags.Static;
+            return @base < 13 ? Mathf.RoundToInt(@base * .8f) : 13;
+        }
+
+        [UsedImplicitly]
+        public static int BoundMaxHealth() => 5;
+
+        private readonly string[] BindingProperties =
+        {
+            nameof(BossSequenceController.IsInSequence),
+            nameof(BossSequenceController.BoundNail),
+            nameof(BossSequenceController.BoundCharms),
+            nameof(BossSequenceController.BoundShell),
+            nameof(BossSequenceController.BoundSoul)
+        };
+
+        private readonly List<Detour> _detours = new List<Detour>();
 
         public override void Initialize()
         {
-            UnityEngine.SceneManagement.SceneManager.activeSceneChanged += (a, b) =>
+            foreach (string property in BindingProperties)
             {
-                if (GameManager.instance == null) return;
-                GameManager.instance.StartCoroutine(SetBindings());
-            };
+                _detours.Add
+                (
+                    new Detour
+                    (
+                        typeof(BossSequenceController).GetProperty(property)?.GetGetMethod(),
+                        typeof(Bindings).GetMethod(nameof(True))
+                    )
+                );
+            }
 
-            ModHooks.Instance.SoulGainHook += OnSoulGain;
+            _detours.Add
+            (
+                new Detour
+                (
+                    typeof(BossSequenceController).GetProperty(nameof(BossSequenceController.BoundNailDamage))?.GetGetMethod(),
+                    typeof(Bindings).GetMethod(nameof(BoundNailDamage))
+                )
+            );
+            
+            _detours.Add
+            (
+                new Detour
+                (
+                    typeof(BossSequenceController).GetProperty(nameof(BossSequenceController.BoundMaxHealth))?.GetGetMethod(),
+                    typeof(Bindings).GetMethod(nameof(BoundMaxHealth))
+                )
+            );
 
-            On.GetNailDamage.OnEnter += NailBinding;
-            On.HeroController.MaxHealth += MaxHealth;
+            ModHooks.Instance.SavegameLoadHook += OnLoad;
+            ModHooks.Instance.NewGameHook += NewGame;
+            On.BossSceneController.RestoreBindings += NoOp;
+        }
+        
+        private static void NoOp(On.BossSceneController.orig_RestoreBindings orig, BossSceneController self) {}
+
+        private static void NewGame() => OnLoad();
+
+        private static void OnLoad(int id = -1)
+        {
+            GameManager.instance.OnFinishedEnteringScene -= ShowIcons;
+            GameManager.instance.OnFinishedEnteringScene += ShowIcons;
         }
 
-        private int OnSoulGain(int num)
+        private static void ShowIcons()
         {
-            Log(PlayerData.instance.MPCharge + "?: " + num);
-            return PlayerData.instance.MPCharge + num > 33 ? 0 : num;
+            GameManager.instance.StartCoroutine(ShowIconsCoroutine());
         }
 
-        private static void MaxHealth(On.HeroController.orig_MaxHealth orig, HeroController self)
+        private static IEnumerator ShowIconsCoroutine()
         {
-            self.playerData.prevHealth = 4;
-            self.playerData.health = 4;
-            self.playerData.blockerHits = 4;
-            self.playerData.UpdateBlueHealth();
-            self.proxyFSM.SendEvent("HeroCtrl-MaxHealth");
-        }
-
-        private static void NailBinding(On.GetNailDamage.orig_OnEnter orig, GetNailDamage self)
-        {
-            if (!self.storeValue.IsNone)
-            {
-                self.storeValue.Value = 13;
-            }
-
-            self.Finish();
-        }
-
-        private IEnumerator SetBindings()
-        {
-            if (HeroController.instance == null || GameManager.instance == null)
-            {
-                yield break;
-            }
-
-            if (DATA_FI == null || SEQUENCE_FI == null)
-            {
-                Log("wtf");
-                yield break;
-            }
-
-            BossSequenceData data = (BossSequenceData) DATA_FI.GetValue(null);
-            if (data == null)
-            {
-                DATA_FI.SetValue(null, new BossSequenceData
-                {
-                    bindings = BINDINGS
-                });
-            }
-            else if (string.IsNullOrEmpty(data.bossSequenceName))
-            {
-                data.bindings = BINDINGS;
-            }
-
-            BossSequence seq = (BossSequence) SEQUENCE_FI.GetValue(null);
-
-            if (seq == null)
-            {
-                yield return new WaitForSeconds(.1f);
-                seq = (BossSequence) SEQUENCE_FI.GetValue(null);
-                if (seq == null)
-                {
-                    BossSequence bs = ScriptableObject.CreateInstance<BossSequence>();
-                    bs.maxHealth = 4;
-                    bs.nailDamage = 13;
-                    bs.lowerNailDamagePercentage = 1f;
-
-                    SEQUENCE_FI.SetValue(null, bs);
-                }
-            }
-
-            if (seq != null && seq.Count == 1)
-            {
-                seq.maxHealth = 4;
-                seq.nailDamage = 13;
-            }
-
+            yield return new WaitWhile(() => HeroController.instance == null);
+            
+            yield return null;
+            
             EventRegister.SendEvent("SHOW BOUND NAIL");
-            GameManager.instance.playerData.equippedCharms.Clear();
-            GameManager.instance.playerData.overcharmed = false;
-            for (int i = 0; i < 50; i++)
-            {
-                PlayerData.instance.SetBoolInternal("equippedCharm_" + i, false);
-            }
-
-            PlayerData.instance.equippedCharms.Clear();
             EventRegister.SendEvent("SHOW BOUND CHARMS");
-            HeroController.instance.CharmUpdate();
-            PlayMakerFSM.BroadcastEvent("CHARM EQUIP CHECK");
-            EventRegister.SendEvent("UPDATE BLUE HEALTH");
-            PlayMakerFSM.BroadcastEvent("HUD IN");
-            EventRegister.SendEvent("BIND VESSEL ORB");
 
-            while (GameManager.instance == null ||
-                   GameManager.instance.soulOrb_fsm == null ||
-                   GameManager.instance.soulVessel_fsm == null ||
-                   GameCameras.instance.soulOrbFSM == null ||
-                   GameCameras.instance.soulVesselFSM == null ||
-                   GameObject.Find("Health 11") == null)
+            if (PlayerData.instance.equippedCharms.Count == 0) yield break;
+            
+            foreach (int charm in PlayerData.instance.equippedCharms)
             {
-                yield return null;
+                GameManager.instance.SetPlayerDataBool($"equippedCharm_{charm}", false);
             }
+            
+            PlayerData.instance.equippedCharms.Clear();
+        }
 
-            yield return new WaitForSeconds(.2f);
-
-            PlayerData.instance.ClearMP();
-            GameManager.instance.soulOrb_fsm.SendEvent("MP LOSE");
-            GameManager.instance.soulVessel_fsm.SendEvent("MP RESERVE DOWN");
-            PlayMakerFSM.BroadcastEvent("CHARM INDICATOR CHECK");
-
-            yield return new WaitForSeconds(2f);
-
-            if (seq == null)
+        public void Unload()
+        {
+            foreach (Detour d in _detours)
             {
-                SEQUENCE_FI.SetValue(null, null);
+                d.Dispose();
             }
-
-            Log("fin");
+            
+            _detours.Clear();
+            
+            ModHooks.Instance.SavegameLoadHook -= OnLoad;
+            ModHooks.Instance.NewGameHook -= NewGame;
+            On.BossSceneController.RestoreBindings -= NoOp;
         }
     }
 }
