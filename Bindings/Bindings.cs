@@ -1,6 +1,5 @@
 ﻿using System.Collections;
 using System.Collections.Generic;
-using System.Reflection;
 using JetBrains.Annotations;
 using Modding;
 using MonoMod.RuntimeDetour;
@@ -23,11 +22,10 @@ namespace Bindings
         }
 
         [UsedImplicitly]
-        public static int BoundMaxHealth() => 5;
+        public static int BoundMaxHealth() => 4;
 
         private readonly string[] BindingProperties =
         {
-            nameof(BossSequenceController.IsInSequence),
             nameof(BossSequenceController.BoundNail),
             nameof(BossSequenceController.BoundCharms),
             nameof(BossSequenceController.BoundShell),
@@ -71,8 +69,15 @@ namespace Bindings
             ModHooks.Instance.SavegameLoadHook += OnLoad;
             ModHooks.Instance.NewGameHook += NewGame;
             On.BossSceneController.RestoreBindings += NoOp;
+            On.GGCheckBoundSoul.OnEnter += CheckBoundSoulEnter;
         }
-        
+
+        private static void CheckBoundSoulEnter(On.GGCheckBoundSoul.orig_OnEnter orig, GGCheckBoundSoul self)
+        {
+            self.Fsm.Event(self.boundEvent);
+            self.Finish();
+        }
+
         private static void NoOp(On.BossSceneController.orig_RestoreBindings orig, BossSceneController self) {}
 
         private static void NewGame() => OnLoad();
@@ -96,7 +101,11 @@ namespace Bindings
             
             EventRegister.SendEvent("SHOW BOUND NAIL");
             EventRegister.SendEvent("SHOW BOUND CHARMS");
+            EventRegister.SendEvent("BIND VESSEL ORB");
 
+            // You need to lose/gain soul for this to happen, so we just set it explicitly.
+            GameManager.instance.soulOrb_fsm.SetState("Bound");
+            
             if (PlayerData.instance.equippedCharms.Count == 0) yield break;
             
             foreach (int charm in PlayerData.instance.equippedCharms)
@@ -119,6 +128,7 @@ namespace Bindings
             ModHooks.Instance.SavegameLoadHook -= OnLoad;
             ModHooks.Instance.NewGameHook -= NewGame;
             On.BossSceneController.RestoreBindings -= NoOp;
+            On.GGCheckBoundSoul.OnEnter -= CheckBoundSoulEnter;
         }
     }
 }
