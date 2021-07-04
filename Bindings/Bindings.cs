@@ -32,7 +32,7 @@ namespace Bindings
             nameof(BossSequenceController.BoundSoul)
         };
 
-        private readonly List<Detour> _detours = new List<Detour>();
+        private readonly List<Detour> _detours = new();
 
         public override void Initialize()
         {
@@ -66,8 +66,8 @@ namespace Bindings
                 )
             );
 
-            ModHooks.Instance.SavegameLoadHook += OnLoad;
-            ModHooks.Instance.NewGameHook += NewGame;
+            ModHooks.SavegameLoadHook += OnLoad;
+            ModHooks.NewGameHook += NewGame;
             On.BossSceneController.RestoreBindings += NoOp;
             On.GGCheckBoundSoul.OnEnter += CheckBoundSoulEnter;
         }
@@ -95,7 +95,7 @@ namespace Bindings
 
         private static IEnumerator ShowIconsCoroutine()
         {
-            yield return new WaitWhile(() => HeroController.instance == null);
+            yield return new WaitWhile(() => HeroController.UnsafeInstance == null);
             
             yield return null;
             
@@ -125,8 +125,8 @@ namespace Bindings
             
             _detours.Clear();
             
-            ModHooks.Instance.SavegameLoadHook -= OnLoad;
-            ModHooks.Instance.NewGameHook -= NewGame;
+            ModHooks.SavegameLoadHook -= OnLoad;
+            ModHooks.NewGameHook -= NewGame;
             On.BossSceneController.RestoreBindings -= NoOp;
             On.GGCheckBoundSoul.OnEnter -= CheckBoundSoulEnter;
         }
